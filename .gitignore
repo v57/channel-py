@@ -1,0 +1,20 @@
+# Python / uv environment
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.coverage
+
+# Test and coverage output
+coverage/
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+
+# Benchmark output
+/benchmark.json
+
+# macOS
+.DS_Store

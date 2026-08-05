@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+uv run --extra dev pytest tests/unit -q
+uv run --extra dev pytest tests/interop -q

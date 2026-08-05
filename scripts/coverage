@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+mkdir -p coverage
+rm -f .coverage coverage/lcov.info
+
+uv run --extra dev pytest tests/unit -q \
+  --cov=channel_py \
+  --cov-append \
+  --cov-report=
+
+uv run --extra dev pytest tests/interop -q \
+  --cov=channel_py \
+  --cov-append \
+  --cov-report=
+
+uv run --extra dev coverage report -m
+uv run --extra dev coverage lcov -o coverage/lcov.info
