@@ -6,18 +6,20 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
-from websockets.exceptions import ConnectionClosed
+from websockets.exceptions import ConnectionClosed, InvalidHandshake
 from websockets.legacy.client import connect as ws_connect
 
 from .channel import Channel, Subscription, make_sender
 from .jsonx import dumps, loads
-from .types import SubscriptionEvent
+from .types import DEFAULT_MAX_PAYLOAD, SubscriptionEvent
 
 
 @dataclass(slots=True)
 class ConnectOptions:
     headers: Callable[[], dict[str, str] | Awaitable[dict[str, str]]] | None = None
     on_connect: Callable[[Any], Any | Awaitable[Any]] | None = None
+    # Largest WebSocket message accepted (bytes). Matches the TS/Bun default (16 MiB).
+    max_payload: int = DEFAULT_MAX_PAYLOAD
 
 
 class ClientSender:
@@ -60,10 +62,16 @@ class WebSocketClient:
         self,
         address: str,
         headers: Callable[[], dict[str, str] | Awaitable[dict[str, str]]] | None = None,
+        max_payload: int = DEFAULT_MAX_PAYLOAD,
     ) -> None:
         self.id = 0
         self.address = address
         self.headers = headers
+        self.max_payload = max_payload
+        # Set by `_run` for the connection attempt that just ended: whether it got past the
+        # handshake, and why it failed (None for a clean close or an unreachable address).
+        self.was_connected = False
+        self.close_error: str | None = None
 
         self.ws: Any = None
         self.onopen: Callable[[], Any | Awaitable[Any]] | None = None
@@ -83,20 +91,27 @@ class WebSocketClient:
 
     async def _run(self) -> None:
         while self.is_running:
+            self.was_connected = False
+            self.close_error = None
             try:
                 headers = await self._resolve_headers()
                 kwargs: dict[str, Any] = {}
                 if headers:
                     kwargs["extra_headers"] = headers
                 kwargs["compression"] = None
+                kwargs["max_size"] = self.max_payload
                 kwargs["max_queue"] = None
                 kwargs["read_limit"] = 1_048_576
                 kwargs["write_limit"] = 1_048_576
                 kwargs["ping_interval"] = None
+                # A peer that breaks the protocol (oversized frame, invalid UTF-8) is dropped after
+                # 1 s instead of the default 10 s close handshake, so pending calls settle quickly.
+                kwargs["close_timeout"] = 1
 
                 ws = await ws_connect(self.address, **kwargs)
                 self.ws = ws
                 self.is_connected = True
+                self.was_connected = True
 
                 if self.onopen is not None:
                     value = self.onopen()
@@ -106,15 +121,33 @@ class WebSocketClient:
                 self._replay_pending()
 
                 async for message in ws:
-                    if isinstance(message, str):
+                    if not isinstance(message, str):
+                        continue
+                    try:
                         value = loads(message)
-                        if self.onmessage is not None:
-                            self.onmessage(value)
-            except ConnectionClosed:
-                pass
+                    except Exception as error:
+                        # Same as TS: a peer that sends invalid JSON gets disconnected.
+                        self.close_error = f"invalid message from server: {error}"
+                        # Settle pending calls now; don't wait for the peer's close handshake.
+                        asyncio.create_task(ws.close())
+                        break
+                    if self.onmessage is not None:
+                        self.onmessage(value)
+            except ConnectionClosed as error:
+                # e.g. 1009 (message over max_payload) or 1007 (invalid UTF-8); a plain drop is
+                # reported as "disconnected" by the channel.
+                frame = error.sent or error.rcvd
+                if self.close_error is None and frame is not None and frame.code not in (1000, 1001):
+                    self.close_error = f"connection closed: {frame.code} {frame.reason}".strip()
+            except InvalidHandshake as error:
+                # The address answered but is not a WebSocket server (e.g. HTTP 500).
+                self.close_error = f"websocket handshake failed: {error}"
+            except asyncio.CancelledError:
+                raise
+            except OSError:
+                pass  # not reachable yet: keep pending requests and retry
             except Exception as error:
-                if "101" in str(error):
-                    self.is_running = False
+                self.close_error = str(error) or type(error).__name__
             finally:
                 self.is_connected = False
                 self.ws = None
@@ -251,8 +284,10 @@ def connect_channel(channel: Channel[Any], address: str | int, options: ConnectO
     target = address if isinstance(address, str) else f"ws://127.0.0.1:{address}"
     headers = _option_value(options, "headers", "headers")
     on_connect = _option_value(options, "on_connect", "onConnect")
+    max_payload = _option_value(options, "max_payload", "maxPayload") or DEFAULT_MAX_PAYLOAD
 
     ws = WebSocketClient(target, headers)
+    ws.max_payload = max_payload  # read by the first connect attempt (scheduled, not yet run)
     topics: set[str] = set()
     ws.topics = topics  # type: ignore[attr-defined]
     sender = make_sender(channel, ws)
@@ -303,9 +338,22 @@ def connect_channel(channel: Channel[Any], address: str | int, options: ConnectO
                 subscription.publishers.remove(publisher)
 
     def on_close() -> None:
+        close_error = getattr(ws, "close_error", None)
         if not ws.is_running:
             cleanup_publishers()
+        elif not getattr(ws, "was_connected", True) and close_error is None:
+            # Address not reachable yet: keep pending requests, they are re-sent on connect.
+            return
+        if close_error is not None:
+            channel.fail_requests(sender, close_error)
+        # Settles whatever is left with "disconnected" so no caller waits forever.
         channel.disconnect(state, sender)
+        pending = getattr(ws, "pending", None)
+        if pending:
+            # Don't re-send requests that were just failed.
+            for key, body in list(pending.items()):
+                if isinstance(body, dict) and "id" in body and body["id"] not in channel.requests:
+                    pending.pop(key, None)
 
     ws.onclose = on_close
     ws.onmessage = lambda message: channel.receive(message, controller)

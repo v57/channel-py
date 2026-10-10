@@ -225,7 +225,8 @@ async def test_receive_one_subscribe_after_async_body_resolves() -> None:
     assert {"id": 9, "topic": "news/ready", "body": "OK"} in controller.responses
 
 
-def test_subscription_topic_and_body_replace_topic_formatter() -> None:
+def test_subscription_body_sets_body_formatter_not_topic() -> None:
+    # TS 6d42247: body() sets the body formatter; topic() keeps formatting the topic.
     subscription = Subscription()
     events: list[dict[str, Any]] = []
 
@@ -237,8 +238,28 @@ def test_subscription_topic_and_body_replace_topic_formatter() -> None:
     subscription.topic(lambda body: f"topic-{body}")
     subscription.body(lambda body: f"body-{body}")
     subscription.send("x", "payload")
+    subscription.send("y")
 
-    assert events == [{"topic": "body-x", "body": "payload"}]
+    assert events == [
+        {"topic": "topic-x", "body": "payload"},
+        {"topic": "topic-y", "body": "body-y"},
+    ]
+
+
+def test_subscription_publish_drops_only_js_falsy_bodies() -> None:
+    # TS: `if (!body) return` -> drops undefined/null/false/0/NaN/""; keeps [], {}, "0".
+    subscription = Subscription()
+    bodies: list[Any] = []
+
+    class Publisher:
+        def publish(self, event: Any) -> None:
+            bodies.append(event.body)
+
+    subscription.publishers.append(Publisher())
+    for body in (None, False, 0, 0.0, float("nan"), "", [], {}, "0", True, 1, "a"):
+        subscription.publish("t", body)
+
+    assert bodies == [[], {}, "0", True, 1, "a"]
 
 
 def test_object_map_unchecked_set_behavior() -> None:

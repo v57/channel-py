@@ -12,7 +12,7 @@ from websockets.legacy.server import WebSocketServerProtocol, serve as ws_serve
 
 from .channel import Channel, Subscription, make_sender
 from .jsonx import dumps, loads
-from .types import SubscriptionEvent
+from .types import DEFAULT_MAX_PAYLOAD, SubscriptionEvent
 
 
 @dataclass(slots=True)
@@ -27,6 +27,8 @@ class ListenOptions:
     state: Callable[[dict[str, str | None]], Any | Awaitable[Any]] | None = None
     on_connect: Callable[[BodyContext], Any | Awaitable[Any]] | None = None
     on_disconnect: Callable[[BodyContext], Any | Awaitable[Any]] | None = None
+    # Largest WebSocket message accepted (bytes). Matches the TS/Bun default (16 MiB).
+    max_payload: int = DEFAULT_MAX_PAYLOAD
 
 
 class Subscriptions:
@@ -168,11 +170,13 @@ class RunningServer:
 
     async def _start(self) -> None:
         self._attach_publishers()
+        max_payload = self._option_value("max_payload", "maxPayload") or DEFAULT_MAX_PAYLOAD
         self._server = await ws_serve(
             self._handle_client,
             self._host,
             self._port,
             compression=None,
+            max_size=max_payload,
             max_queue=None,
             read_limit=1_048_576,
             write_limit=1_048_576,
@@ -209,8 +213,9 @@ class RunningServer:
         parsed = urlparse(path)
         for key, values in parse_qs(parsed.query).items():
             headers[key] = values[-1] if values else None
+        # Real headers win over query parameters, and header names are lowercased (TS/Bun parity).
         for key, value in websocket.request_headers.items():
-            headers[key] = value
+            headers[key.lower()] = value
 
         value = state_factory(headers)
         if asyncio.iscoroutine(value):

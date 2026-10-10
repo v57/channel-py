@@ -6,6 +6,9 @@ from typing import Any, Generic, Protocol, TypeVar
 
 StateT = TypeVar("StateT")
 
+# Largest WebSocket message accepted by default: 16 MiB, the TS/Bun default.
+DEFAULT_MAX_PAYLOAD = 16 * 1024 * 1024
+
 
 class ChannelError(Exception):
     pass

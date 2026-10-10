@@ -105,10 +105,12 @@ async def test_websocket_client_run_success_path(monkeypatch: pytest.MonkeyPatch
     assert connect_kwargs and connect_kwargs[0] == {
         "extra_headers": {"x": "1"},
         "compression": None,
+        "max_size": 16 * 1024 * 1024,
         "max_queue": None,
         "read_limit": 1_048_576,
         "write_limit": 1_048_576,
         "ping_interval": None,
+        "close_timeout": 1,
     }
     assert opened == [1]
     assert closed == [1]
@@ -147,16 +149,23 @@ async def test_websocket_client_run_connection_closed(monkeypatch: pytest.Monkey
 
 
 @pytest.mark.asyncio
-async def test_websocket_client_run_error_101_stops(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_websocket_client_run_error_records_reason_and_keeps_retrying(monkeypatch: pytest.MonkeyPatch) -> None:
     async def fake_connect(_address: str, **_kwargs: Any) -> Any:
         raise RuntimeError("handshake failed 101")
 
     monkeypatch.setattr(client_module, "ws_connect", fake_connect)
 
     client = WebSocketClient("ws://unit")
+    reasons: list[Any] = []
+
+    def on_close() -> None:
+        reasons.append(client.close_error)
+        client.is_running = False
+
+    client.onclose = on_close
     await asyncio.wait_for(client._run_task, timeout=1)
 
-    assert client.is_running is False
+    assert reasons == ["handshake failed 101"]
 
 
 @pytest.mark.asyncio

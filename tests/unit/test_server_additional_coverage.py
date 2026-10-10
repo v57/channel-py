@@ -34,7 +34,7 @@ class FakeWebSocket:
         self.iter_error = iter_error
         self.sent: list[str] = []
         self.closed = 0
-        self.request_headers = {"x-token": "abc"}
+        self.request_headers = {"X-Token": "abc"}
 
     async def send(self, payload: str) -> None:
         if self.fail_send:
@@ -139,9 +139,11 @@ async def test_running_server_helpers_and_resolve_state(monkeypatch: pytest.Monk
     ws = FakeWebSocket()
 
     server._options = {"state": lambda headers: {"headers": headers}}
-    resolved = await server._resolve_state(ws, "/?q=1")
+    resolved = await server._resolve_state(ws, "/?q=1&x-token=evil")
     assert resolved["headers"]["q"] == "1"
+    # header names are lowercased and real headers win over query parameters
     assert resolved["headers"]["x-token"] == "abc"
+    assert "X-Token" not in resolved["headers"]
 
     async def make_state(headers: dict[str, str | None]) -> Any:
         return {"async": headers.get("x-token")}

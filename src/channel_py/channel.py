@@ -78,6 +78,14 @@ class ObjectMap(dict[Any, Any]):
         self.for_each(callback)
 
 
+def _is_js_falsy(value: Any) -> bool:
+    if value is None or value is False:
+        return True
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return value == 0 or value != value
+    return isinstance(value, str) and value == ""
+
+
 class Subscription:
     def __init__(self) -> None:
         self.publishers: list[Any] = []
@@ -97,9 +105,8 @@ class Subscription:
     def topic(self, make: Callable[[Any], str]) -> None:
         self._topic = make
 
-    # Keep TS quirk for behavior parity.
     def body(self, make: Callable[[Any], Any]) -> None:
-        self._topic = cast(Callable[[Any], str], make)
+        self._body = make
 
     def send(self, request: Any, body: Any | None = None) -> None:
         topic = self._topic(request)
@@ -117,7 +124,9 @@ class Subscription:
             self.publish(topic, payload)
 
     def publish(self, topic: str, body: Any | None = None) -> None:
-        if not body:
+        # TS drops every JS-falsy body (`if (!body) return`): undefined, null, false, 0, NaN, "".
+        # Empty lists/dicts are truthy in JS, so they are published.
+        if _is_js_falsy(body):
             return
         full_topic = f"{self.prefix}/{topic}" if self.prefix else topic
         event = SubscriptionEvent(topic=full_topic, body=body)
@@ -513,12 +522,24 @@ class Channel(Generic[StateT]):
                 except Exception:
                     pass
 
-        to_delete = [rid for rid, request in self.requests.items() if request.sender is sender]
-        for request_id in to_delete:
-            self.requests.pop(request_id, None)
+        self.fail_requests(sender, "disconnected")
 
         sender.streams.clear()
         sender.requests.clear()
+
+    def fail_requests(self, sender: Sender, error: str) -> None:
+        """Settle every pending outgoing request made through `sender` with `error`.
+
+        TS silently drops them on disconnect, which strands the caller forever; here the
+        caller's future/iterator gets a ChannelError instead.
+        """
+        to_fail = [(rid, request) for rid, request in self.requests.items() if request.sender is sender]
+        for request_id, request in to_fail:
+            self.requests.pop(request_id, None)
+            try:
+                request.response({"id": request_id, "error": error})
+            except Exception:
+                pass
 
     def make_request(
         self,
