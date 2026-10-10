@@ -185,3 +185,31 @@ async def test_channel_aliases_parse_api_merge_and_wrappers(monkeypatch: pytest.
     assert channel.connect(1) == "connected"
     assert channel.listen(1) == "listened"
     assert channel.process() == "processed"
+
+
+@pytest.mark.asyncio
+async def test_merge_keeps_post_other_and_stream_other_under_prefix() -> None:
+    async def feed(_body: Any) -> AsyncIterator[int]:
+        yield 1
+
+    inner = (
+        Channel()
+        .post_other(lambda path: path.startswith("dyn/"), lambda request: f"post:{request.body}")
+        .stream_other(lambda path: path == "feed", feed)
+    )
+    outer = Channel().merge(inner, "m")
+
+    assert len(outer.other_post_api) == 1
+    assert outer.other_post_api[0][0]("m/dyn/x") is True
+    assert outer.other_post_api[0][0]("dyn/x") is False
+    assert outer.other_stream_api[0][0]("m/feed") is True
+
+    sender = outer.process()
+    assert await sender.send("m/dyn/x", "a") == "post:a"
+    with pytest.raises(Exception):
+        await sender.send("dyn/x", "a")
+
+    # Without a prefix the matchers are reused as-is
+    flat = Channel().merge(inner)
+    assert flat.other_post_api[0][0] is inner.other_post_api[0][0]
+    assert flat.other_post_api[0][0]("dyn/x") is True

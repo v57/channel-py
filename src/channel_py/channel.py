@@ -860,6 +860,16 @@ class Channel(Generic[StateT]):
             self.post(f"{p}{key}", value)
         for key, value in channel.stream_api.items():
             self.stream(f"{p}{key}", value)
+
+        def scoped(match: Callable[[str], bool]) -> Callable[[str], bool]:
+            if not p:
+                return match
+            return lambda path: path.startswith(p) and match(path[len(p):])
+
+        for match, handler in channel.other_post_api:
+            self.post_other(scoped(match), handler)
+        for match, handler in channel.other_stream_api:
+            self.stream_other(scoped(match), handler)
         return self
 
     def _parse_api(self, api: dict[str, Any], prefix: str) -> None:
