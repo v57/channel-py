@@ -10,6 +10,12 @@ Powerful and lightweight communication built for modern language. Python impleme
 uv sync --extra dev
 ```
 
+# Dependencies
+
+Three packages, for speed: [`orjson`](https://pypi.org/project/orjson/) (JSON),
+[`websockets`](https://pypi.org/project/websockets/) (client and server) and
+[`uvloop`](https://pypi.org/project/uvloop/) (event loop, not on Windows).
+
 # Usage
 
 ```python
