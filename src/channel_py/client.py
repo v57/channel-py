@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import random
 from collections import defaultdict, deque
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -57,6 +58,12 @@ class ClientSender:
         self._sender.stop()
 
 
+def reconnect_delay(attempt: int, jitter: float) -> float:
+    """Seconds before reconnect attempt `attempt` (0 = first retry): 100 ms doubling up to 5 s, scaled to
+    50-100% by `jitter` (0..1) so clients don't retry in lockstep. Same numbers as the TypeScript client."""
+    return min(5.0, 0.1 * 2 ** min(attempt, 16)) * (0.5 + jitter / 2)
+
+
 class WebSocketClient:
     def __init__(
         self,
@@ -81,6 +88,7 @@ class WebSocketClient:
         self.pending: dict[int, Any] = {}
         self.is_connected = False
         self.is_running = True
+        self.attempts = 0
 
         self._outbox: deque[Any] = deque()
         self._outbox_event = asyncio.Event()
@@ -112,6 +120,7 @@ class WebSocketClient:
                 self.ws = ws
                 self.is_connected = True
                 self.was_connected = True
+                self.attempts = 0
 
                 if self.onopen is not None:
                     value = self.onopen()
@@ -155,7 +164,8 @@ class WebSocketClient:
                     self.onclose()
 
             if self.is_running:
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(reconnect_delay(self.attempts, random.random()))
+                self.attempts += 1
 
     async def _resolve_headers(self) -> dict[str, str] | None:
         if self.headers is None:
