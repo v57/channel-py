@@ -12,7 +12,7 @@ uv sync --extra dev
 
 # Dependencies
 
-Three packages, for speed: [`orjson`](https://pypi.org/project/orjson/) (JSON),
+Three packages, for speed (plus `aioquic` with the optional `quic` extra): [`orjson`](https://pypi.org/project/orjson/) (JSON),
 [`websockets`](https://pypi.org/project/websockets/) (client and server) and
 [`uvloop`](https://pypi.org/project/uvloop/) (event loop, not on Windows).
 
@@ -42,6 +42,45 @@ from channel_py import Channel
 sender = Channel().post("hello", lambda _body: "world").process()
 value = await sender.send("hello")
 ```
+
+# QUIC transport (experimental)
+
+The same messages over QUIC instead of WebSocket (see `../channel/docs/quic.md` for the protocol). It needs
+[`aioquic`](https://pypi.org/project/aioquic/), an optional extra: the WebSocket-only install doesn't get it, and
+`import channel_py` never imports it.
+
+```bash
+pip install "channel-py[quic]"      # or: uv sync --extra quic
+```
+
+```python
+# Server: QUIC always needs a key and certificate (PEM text)
+from channel_py import Channel
+
+key, cert = open("key.pem").read(), open("cert.pem").read()
+server = Channel().post("hello", lambda _body: "world").listen_quic(4433, {"key": key, "cert": cert})
+await server.wait_started()
+# same state / on_connect / on_disconnect / max_payload options as listen(); listenQuic is an alias
+await server.stop_async()
+```
+
+```python
+# Client: connect() takes quic:// addresses
+client = Channel().connect("quic://example.com:4433")
+print(await client.send("hello"))
+```
+
+Certificates (`ConnectOptions(quic=QuicOptions(...))` or `{"quic": {...}}`):
+- **Trusted certificate** (for example Let's Encrypt): nothing to configure (certifi's roots).
+- **Self-signed**: `{"quic": {"ca": cert}}` trusts that PEM certificate. The address must be in its subject
+  alternative names, as a DNS name or an IP address.
+- **Pinned**: `{"quic": {"fingerprint": "DD:D2:37:…"}}` accepts only the certificate with that SHA-256 fingerprint
+  (hex, colons optional) and skips the other checks.
+- `servername` overrides the name sent and checked (it defaults to the address host).
+
+The client dials each connection from its own UDP socket, never one shared endpoint (Network.framework servers take
+one connection per client address and port). Reconnects, headers, streams and events work as over WebSocket.
+Which languages support QUIC: see `channel/docs/quic.md`.
 
 # API naming
 

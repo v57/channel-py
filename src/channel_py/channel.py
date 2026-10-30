@@ -763,7 +763,8 @@ class Channel(Generic[StateT]):
                         try:
                             value = await cast(Awaitable[Any], body)
                             controller.subscribe(topic)
-                            response = {"topic": topic, "body": value}
+                            # No body without a snapshot: TS clients pass any "body" to the event handler
+                            response = {"topic": topic} if value is None else {"topic": topic, "body": value}
                             if request_id is not None:
                                 response["id"] = request_id
                             controller.response(response)
@@ -774,7 +775,7 @@ class Channel(Generic[StateT]):
                     asyncio.create_task(done())
                 else:
                     controller.subscribe(topic)
-                    response = {"topic": topic, "body": body}
+                    response = {"topic": topic} if body is None else {"topic": topic, "body": body}
                     if request_id is not None:
                         response["id"] = request_id
                     controller.response(response)
@@ -893,6 +894,16 @@ class Channel(Generic[StateT]):
         from .server import listen_channel
 
         return listen_channel(self, address, options)
+
+    def listen_quic(self, address: str | int, options: Any) -> Any:
+        """Serves this channel over QUIC (experimental, needs the `quic` extra). `options` takes `key` and `cert`
+        (PEM) next to the same state / on_connect / on_disconnect options as listen()."""
+        from .quic import listen_quic
+
+        return listen_quic(self, address, options)
+
+    def listenQuic(self, address: str | int, options: Any) -> Any:
+        return self.listen_quic(address, options)
 
     def process(self) -> Sender:
         from .process import process_channel

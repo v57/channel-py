@@ -19,8 +19,23 @@ from .types import DEFAULT_MAX_PAYLOAD, SubscriptionEvent
 class ConnectOptions:
     headers: Callable[[], dict[str, str] | Awaitable[dict[str, str]]] | None = None
     on_connect: Callable[[Any], Any | Awaitable[Any]] | None = None
-    # Largest WebSocket message accepted (bytes). Matches the TS/Bun default (16 MiB).
+    # Largest WebSocket message (or QUIC frame) accepted (bytes). Matches the TS/Bun default (16 MiB).
     max_payload: int = DEFAULT_MAX_PAYLOAD
+    # TLS settings for quic:// addresses (QuicOptions or a dict with the same keys)
+    quic: "QuicOptions | dict[str, Any] | None" = None
+
+
+@dataclass(slots=True)
+class QuicOptions:
+    """TLS settings for `quic://` addresses. Without them the server certificate must be trusted by the system
+    (certifi's roots)."""
+
+    # PEM certificate (or CA) to trust, for self-signed servers
+    ca: str | bytes | None = None
+    # SHA-256 fingerprint of the server certificate to pin instead of verifying it (hex, colons optional)
+    fingerprint: str | None = None
+    # Name sent and checked instead of the address host
+    servername: str | None = None
 
 
 class ClientSender:
@@ -84,6 +99,7 @@ class WebSocketClient:
         self.onopen: Callable[[], Any | Awaitable[Any]] | None = None
         self.onclose: Callable[[], None] | None = None
         self.onmessage: Callable[[Any], None] | None = None
+        self.onstop: Callable[[], None] | None = None
 
         self.pending: dict[int, Any] = {}
         self.is_connected = False
@@ -103,20 +119,7 @@ class WebSocketClient:
             self.close_error = None
             try:
                 headers = await self._resolve_headers()
-                kwargs: dict[str, Any] = {}
-                if headers:
-                    kwargs["extra_headers"] = headers
-                kwargs["compression"] = None
-                kwargs["max_size"] = self.max_payload
-                kwargs["max_queue"] = None
-                kwargs["read_limit"] = 1_048_576
-                kwargs["write_limit"] = 1_048_576
-                kwargs["ping_interval"] = None
-                # A peer that breaks the protocol (oversized frame, invalid UTF-8) is dropped after
-                # 1 s instead of the default 10 s close handshake, so pending calls settle quickly.
-                kwargs["close_timeout"] = 1
-
-                ws = await ws_connect(self.address, **kwargs)
+                ws = await self._open(headers)
                 self.ws = ws
                 self.is_connected = True
                 self.was_connected = True
@@ -164,8 +167,31 @@ class WebSocketClient:
                     self.onclose()
 
             if self.is_running:
-                await asyncio.sleep(reconnect_delay(self.attempts, random.random()))
+                try:
+                    await asyncio.sleep(reconnect_delay(self.attempts, random.random()))
+                except asyncio.CancelledError:
+                    # Stopped while disconnected: settle what still waits
+                    if self.onstop is not None:
+                        self.onstop()
+                    raise
                 self.attempts += 1
+
+    async def _open(self, headers: dict[str, str] | None) -> Any:
+        """Opens one connection: an object with `async send(str)`, `async close()` and async iteration over the
+        received text messages. QuicClient overrides it."""
+        kwargs: dict[str, Any] = {}
+        if headers:
+            kwargs["extra_headers"] = headers
+        kwargs["compression"] = None
+        kwargs["max_size"] = self.max_payload
+        kwargs["max_queue"] = None
+        kwargs["read_limit"] = 1_048_576
+        kwargs["write_limit"] = 1_048_576
+        kwargs["ping_interval"] = None
+        # A peer that breaks the protocol (oversized frame, invalid UTF-8) is dropped after
+        # 1 s instead of the default 10 s close handshake, so pending calls settle quickly.
+        kwargs["close_timeout"] = 1
+        return await ws_connect(self.address, **kwargs)
 
     async def _resolve_headers(self) -> dict[str, str] | None:
         if self.headers is None:
@@ -296,7 +322,12 @@ def connect_channel(channel: Channel[Any], address: str | int, options: ConnectO
     on_connect = _option_value(options, "on_connect", "onConnect")
     max_payload = _option_value(options, "max_payload", "maxPayload") or DEFAULT_MAX_PAYLOAD
 
-    ws = WebSocketClient(target, headers)
+    if target.startswith("quic://"):
+        from .quic import QuicClient
+
+        ws: WebSocketClient = QuicClient(target, headers, max_payload, _option_value(options, "quic", "quic"))
+    else:
+        ws = WebSocketClient(target, headers)
     ws.max_payload = max_payload  # read by the first connect attempt (scheduled, not yet run)
     topics: set[str] = set()
     ws.topics = topics  # type: ignore[attr-defined]
@@ -365,7 +396,12 @@ def connect_channel(channel: Channel[Any], address: str | int, options: ConnectO
                 if isinstance(body, dict) and "id" in body and body["id"] not in channel.requests:
                     pending.pop(key, None)
 
+    def on_stop() -> None:
+        cleanup_publishers()
+        channel.fail_requests(sender, "disconnected")
+
     ws.onclose = on_close
+    ws.onstop = on_stop
     ws.onmessage = lambda message: channel.receive(message, controller)
 
     if channel.events_api:

@@ -40,3 +40,16 @@ async def test_client_backs_off_while_the_server_refuses_the_upgrade() -> None:
 
     # 100 ms retries would make ~20 attempts in 2 s; backoff allows at most 1 + 6 (waits of 50..100, 100..200, ...).
     assert 2 <= attempts <= 8
+
+
+@pytest.mark.asyncio
+async def test_stop_while_disconnected_fails_waiting_requests() -> None:
+    from channel_py import Channel
+
+    # Nothing listens there: the client waits between attempts when it is stopped
+    client = Channel().connect("ws://127.0.0.1:1")
+    request = client.request("hello")
+    await asyncio.sleep(0.05)
+    client.stop()
+    with pytest.raises(Exception, match="disconnected"):
+        await asyncio.wait_for(request.response, 2)

@@ -17,6 +17,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# QUIC transport (experimental): `pip install "channel-py[quic]"`. Imported only by channel_py.quic.
+quic = [
+  "aioquic>=1.2.0",
+]
 dev = [
   "pytest>=8.4.0",
   "pytest-asyncio>=1.1.0",

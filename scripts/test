@@ -5,5 +5,7 @@ hub_run="$(dirname "$0")/../../../HubTools/hub-run"
 [[ -n "${HUB_TOOLCHAIN:-}" || ! -x "$hub_run" ]] || exec "$hub_run" bash "$0" "$@"
 
 cd "$(dirname "$0")/.."
-uv run --extra dev pytest tests/unit -q
-uv run --extra dev pytest tests/interop -q
+# The QUIC tests need the optional aioquic dependency (the quic extra)
+uv run --extra dev --extra quic pytest tests/unit -q
+uv run --extra dev --extra quic pytest tests/quic -q
+uv run --extra dev --extra quic pytest tests/interop -q

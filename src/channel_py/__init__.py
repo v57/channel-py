@@ -7,7 +7,7 @@ from .channel import (
     Values,
     make_sender,
 )
-from .client import ClientSender, ConnectOptions, WebSocketClient
+from .client import ClientSender, ConnectOptions, QuicOptions, WebSocketClient
 from .process import process_channel
 from .server import BodyContext as ServerBodyContext
 from .server import ListenOptions, RunningServer, Server, listen_channel
@@ -23,6 +23,7 @@ __all__ = [
     "make_sender",
     "ClientSender",
     "ConnectOptions",
+    "QuicOptions",
     "WebSocketClient",
     "process_channel",
     "ServerBodyContext",
