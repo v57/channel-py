@@ -80,7 +80,8 @@ Certificates (`ConnectOptions(quic=QuicOptions(...))` or `{"quic": {...}}`):
 
 The client dials each connection from its own UDP socket, never one shared endpoint (Network.framework servers take
 one connection per client address and port). Reconnects, headers, streams and events work as over WebSocket.
-Which languages support QUIC: see `channel/docs/quic.md`.
+Languages with QUIC: TypeScript, Go, Swift, C#, Rust, Python, Elixir, Java, Kotlin, C and Zig; Dart, Ruby and PHP stay
+on WebSocket (libraries and status in `channel/docs/quic.md`).
 
 # API naming
 
