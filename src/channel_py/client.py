@@ -211,9 +211,14 @@ class WebSocketClient:
         first = self._outbox.popleft()
         if not self._outbox:
             return first
-        batch = [first]
-        while self._outbox:
-            batch.append(self._outbox.popleft())
+        batch: list[Any] = []
+        # A replay of pending requests is already a list: a batch nested in a batch would be dropped.
+        for item in (first, *self._outbox):
+            if isinstance(item, list):
+                batch.extend(item)
+            else:
+                batch.append(item)
+        self._outbox.clear()
         return batch
 
     def _restore_outbound_payload(self, payload: Any) -> None:

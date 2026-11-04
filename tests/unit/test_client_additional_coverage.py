@@ -370,3 +370,14 @@ async def test_option_value_and_connect_channel_with_cleanup(monkeypatch: pytest
     client.ws.onclose()  # type: ignore[misc]  # second call covers already-cleaned branch
 
     assert disconnect_calls
+
+
+@pytest.mark.asyncio
+async def test_outbox_flattens_a_replay_into_a_batch() -> None:
+    client = WebSocketClient("ws://127.0.0.1:1")
+    try:
+        client._outbox.extend([[{"id": 0}, {"id": 1}], {"id": 2}])
+        assert client._next_outbound_payload() == [{"id": 0}, {"id": 1}, {"id": 2}]
+        assert client._next_outbound_payload() is None
+    finally:
+        client.stop()
