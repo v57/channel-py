@@ -280,7 +280,8 @@ async def test_make_sender_request_resolves_and_marks_sent_id() -> None:
     request = sender.request("hello")
     request_id = next(iter(channel.requests.keys()))
 
-    controller = RecordingController(DummySender(streams=sender.streams, requests=sender.requests))
+    # The response arrives on the connection the request went to
+    controller = RecordingController(sender)  # type: ignore[arg-type]
     channel.receive_one({"id": request_id, "body": "world"}, controller)
 
     assert await request.response == "world"
@@ -296,7 +297,8 @@ async def test_make_sender_request_rejects_and_marks_sent_id() -> None:
     request = sender.request("hello")
     request_id = next(iter(channel.requests.keys()))
 
-    controller = RecordingController(DummySender(streams=sender.streams, requests=sender.requests))
+    # The response arrives on the connection the request went to
+    controller = RecordingController(sender)  # type: ignore[arg-type]
     channel.receive_one({"id": request_id, "error": "failed"}, controller)
 
     with pytest.raises(Exception, match="failed"):

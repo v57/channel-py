@@ -788,9 +788,11 @@ class Channel(Generic[StateT]):
 
         elif some.get("topic"):
             request_id = some.get("id")
+            # Only from the connection the subscription went to: ids are one counter for every connection
             if request_id is not None:
-                request = self.requests.pop(cast(int, request_id), None)
-                if request is not None:
+                request = self.requests.get(cast(int, request_id))
+                if request is not None and request.sender is controller.sender:
+                    self.requests.pop(cast(int, request_id), None)
                     request.response(some)
             if some.get("body"):
                 controller.event(cast(str, some.get("topic")), some.get("body"))
@@ -798,7 +800,9 @@ class Channel(Generic[StateT]):
         elif some.get("id") is not None:
             request_id = cast(int, some.get("id"))
             request = self.requests.get(request_id)
-            if request is None:
+            # A response answers a request only on the connection it went to. Ids are one counter for every
+            # connection, so another peer of a server could otherwise answer calls the server made to someone else.
+            if request is None or request.sender is not controller.sender:
                 return
             if not ("stream" in request.request and not some.get("done")):
                 self.requests.pop(request_id, None)
